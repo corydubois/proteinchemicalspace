@@ -1,0 +1,258 @@
+---
+title: "PCA.rmd"
+author: "Cory DuBois"
+date: "April 19 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+#This script takes 3 libraries with peptide and chemical property 
+#data and 
+#1. does a PCA on one (the one containing 10M random peptides 
+# in my analysis)
+#2. Uses that PCA data to rotate the other library values
+#3. Uses PC1 and PC2 values to help remove similar peptides from the
+# library we did the PCA on. Aim is to make a fourth library
+# (~100,000 peptides in my experience) from the libary we used for 
+# the PCA with a larger variation
+#4 Combine all libraries and graph variation (PC1 vs PC2 and plots
+# of PC1 or PC2 density)
+#_
+#I make heavy use of the data.tables package as it's extremely fast
+#when working with huge (1GB+) files and databases. If you find it
+#confusing, you can treat the data.table as a data.frame and apply
+#any dplyr/tidyr function to it with the caveat that it may be a bit
+#slow
+
+##Load packages
+```{r}
+require(data.table)
+require(ggplot2)
+require(ggfortify)
+require(stats)
+require(lfda)
+require(cluster)
+require(cowplot)
+require(tidyr)
+require(dplyr)
+#set color palette
+cbbPalette <- c("#000000", "#E69F00", "#0072B2","#F0E442", "#009E73", "#CC79A7")
+```
+
+#Load data file
+```{r}
+#Note: you may have to edit filepaths or move files to run this
+
+#load in full random peptides and properties
+liberry<-fread("5mil_properties.tsv")
+liberry<-liberry[,!c("pept_length"),with=FALSE]
+liberry[is.na(liberry)]<-0
+
+#big library
+big_lib <- fread("random_peptide_properties.tsv")
+big_lib<-big_lib[,!c("pept_length"),with=FALSE]
+big_lib[is.na(big_lib)]<-0
+
+#load in 100000 random peptides and properties
+random<-fread("100000_properties.tsv",na.strings=NULL)
+random<-random[,!c("pept_length"),with=FALSE]
+random[is.na(random)]<-0
+
+#load in 100000 random peptides from top 17 aa and properties
+rando15 <- fread("select100Klibrary_5mil_top1000.tsv",na.strings=NULL)
+rando15<-rando15[,!c("pept_length"),with=FALSE]
+rando15[is.na(rando15)]<-0
+
+#load kmeans
+kmeans <- fread("library_generatedby_kmeans.csv",na.strings=NULL)
+kmeans<-kmeans[,!c("V1"),with=FALSE]
+kmeans[is.na(kmeans)]<-0
+
+#load knn
+knn <- fread("knn_.099mil.csv",na.strings=NULL)
+knn<-knn[,!c("V1","X","finish","weight"),with=FALSE]
+knn[is.na(knn)]<-0
+
+knn<-merge(knn,big_lib,by=c("peptide"))
+knn<-knn[,!c("aromatic.x","gravy.x","insta.x","isoelectric.x","flexibility.x"),with=FALSE]
+colnames(knn)<-colnames(liberry)
+remove(big_lib)
+
+```
+
+#get columns for pca
+```{r}
+#subsets each library to only include numerical columns for PCA
+liberry %>% select(aromatic:flexibility) -> full.pca.cols
+
+random %>% select(aromatic:flexibility) -> rando.pca.cols
+
+rando15 %>% select(aromatic:flexibility) -> rando.pca.cols15
+
+kmeans %>% select(aromatic:flexibility) -> kmeans.pca.cols
+
+knn %>% select(aromatic:flexibility) -> knn.pca.cols
+
+```
+
+#pca
+```{r}
+#Do the PCA on the full library
+full.pca <- prcomp (full.pca.cols, center = TRUE, scale. = TRUE)
+#Remove to free up memory
+remove(full.pca.cols)
+#print summary to get PC1 and PC2 percent variance explained
+summary(full.pca)
+
+#apply PCA rotation from full library to this library
+rando.pca <- predict(full.pca,rando.pca.cols)
+remove(rando.pca.cols)
+
+#apply PCA rotation from full library to this library
+rando.pca15 <- predict(full.pca,rando.pca.cols15)
+remove(rando.pca.cols15)
+
+#apply PCA rotation from full library to this library
+kmeans.pca <- predict(full.pca,kmeans.pca.cols)
+remove(kmeans.pca.cols)
+
+#apply PCA rotation from full library to this library
+knn.pca <- predict(full.pca,knn.pca.cols)
+remove(knn.pca.cols)
+
+
+```
+
+```{r}
+
+#add pc1 and pc2 values to each libary, as well as placeholder values for PC1_bins, PC2_bins, and factor_len. Assign group name as factor_var
+random[,pcomp1:=rando.pca[,1]][,pcomp2:=rando.pca[,2]][,PC1_bins:=76][,PC2_bins:=76][,factor_len:=101][,factor_var:="100K"]
+rando15[,pcomp1:=rando.pca15[,1]][,pcomp2:=rando.pca15[,2]][,PC1_bins:=76][,PC2_bins:=76][,factor_len:=101][,factor_var:="Extreme"]
+kmeans[,pcomp1:=kmeans.pca[,1]][,pcomp2:=kmeans.pca[,2]][,PC1_bins:=76][,PC2_bins:=76][,factor_len:=101][,factor_var:="Kmeans"]
+knn[,pcomp1:=knn.pca[,1]][,pcomp2:=knn.pca[,2]][,PC1_bins:=76][,PC2_bins:=76][,factor_len:=101][,factor_var:="KNN"]
+
+#add pc1 and pc2 values to full library
+liberry[,pcomp1:= full.pca$x[,1]][,pcomp2:= full.pca$x[,2]]
+
+#assign binning values based on pc1 and pc2 values. These will be used later to determine proximity and remove points
+liberry[,PC1_bins:=cut(pcomp1,breaks=100,labels=FALSE)][,PC2_bins:=cut(pcomp2,breaks=100,labels=FALSE)]
+
+#get size of each pair of bins (i.e. size of (1,1), size of (1,2)...)
+liberry[,factor_len:=length(pcomp1),by=c("PC1_bins","PC2_bins")]
+
+#keep all values from bins with <=10 peptides
+keep <- liberry[factor_len<=10]
+
+#get peptide and bins from keep so you can combine with other data later
+keep %>% select(peptide,PC1_bins,PC2_bins) ->keep
+
+#if more than 10 peptides in bin, get a random number of peptides equal the rounded down result of (log2(bin length)*3)/1
+keep2 <- liberry[factor_len>10][,sample(peptide, ((log2(factor_len)*3)%/%1)), by=c("PC1_bins","PC2_bins")]
+
+#set column names
+colnames(keep2) <- c("PC1_bins","PC2_bins","peptide")
+
+#combine data for <= 10 and >10 peptides in bin
+keep <- rbind(keep,keep2)
+
+#this combines the liberry and keep (a subset of liberry) so that columns not in keep are added and only rows in keep are kept.
+dispersed <- merge(liberry,keep, on="peptide")
+#set factor names
+dispersed[,factor_var:="Grid"]
+liberry[,factor_var:="5M "]
+
+#USE THIS LINE IF YOU ONLY WANT TO USE THE PRUNED AND FULL LIBRARIES
+#########liberry <- rbind(liberry,dispersed)
+#combine the four datasets
+liberry <- rbind(liberry,dispersed,random,rando15,kmeans,knn)
+
+#make factor_var a factor variable
+liberry[,factor_var:=as.factor(factor_var)]
+
+#this randomizes the points in the library so the PCA looks a little better
+randos <- sample(nrow(liberry))
+liberry<- liberry[randos,]
+
+#remove full data from library for histogram visualization
+liberry.histo <- liberry[factor_var!="5M "]
+
+fwrite(liberry.histo,"combined_pca_data.csv")
+```
+
+#plots!
+```{r}
+
+#code for scatter plot of PC1 v PC2 (this takes forever to run)
+pca <- ggplot(data=liberry.histo,aes(x=pcomp1 ,y=pcomp2 ,colour=factor_var))+geom_point(alpha=0.3,shape = 20, size = 0.2)+
+  scale_colour_manual(values=cbbPalette[2:6])+
+  theme(legend.position = "bottom",
+        legend.title=element_blank(),
+        legend.text=element_text(size=10))+
+  ggtitle("PCA of Chemical Properties")+
+  ylab("PC2 (20.7%)")+xlab("PC1 (37.8%)")+
+  stat_ellipse(size=0.5,alpha=1,aes( colour=factor_var),type="t")
+
+pca <- plot_grid(pca,labels=c("A"),ncol=1)
+save_plot(filename="PCA.png",pca)
+
+#code for violin plot of PC1
+vio1 <- ggplot(data=liberry,aes(x=factor_var,y=pcomp1 ,fill=factor_var))+
+  geom_violin(bw=1.5)+
+  scale_fill_manual(values=cbbPalette)+
+  theme(axis.ticks.x=element_blank(),
+      axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      legend.position="right",
+      legend.title=element_blank(),
+      panel.background=element_blank(),
+      panel.border=element_blank(),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      plot.background=element_blank(),
+        legend.text=element_text(size=10))+
+  ggtitle("Variability in Principal Component 1")+
+  ylab("PC1 (37.8%)")
+save_plot(filename="vio_1.png",vio1)
+
+#code for violin plot of PC2
+vio2 <- ggplot(data=liberry,aes(x=factor_var,y=pcomp2 ,fill=factor_var))+
+  geom_violin(bw=0.5)+scale_fill_manual(values=cbbPalette)+
+   theme(axis.ticks.x=element_blank(),
+      axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      legend.position="right",
+      legend.title=element_blank(),
+      panel.background=element_blank(),
+      panel.border=element_blank(),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      plot.background=element_blank(),
+        legend.text=element_text(size=10))+
+  ggtitle("Variability in Principal Component 2")+
+      ylab("PC2 (20.7%)")
+
+save_plot(filename="vio_2.png",vio2)
+
+plot_out <- plot_grid(vio1,vio2,labels=c("B","C"),ncol=1)
+save_plot(filename="figure_1.png",plot_out,base_aspect_ratio = 1.2)
+
+#code for histogram of PC1
+outplot <- ggplot(data=liberry.histo,aes(x=pcomp1, fill=factor_var))+
+  geom_histogram(alpha = 0.5,position="dodge",bins=25)
+save_plot(filename="Histo_1.png",outplot)
+
+#code for histogram of PC2
+outplot <- ggplot(data=liberry.histo,aes(x=pcomp2, fill=factor_var))+
+  geom_histogram(alpha = 0.5,position="dodge",bins=20)
+save_plot(filename="Histo_2.png",outplot)
+
+```

@@ -1,0 +1,175 @@
+---
+title: "calc_properties.Rmd"
+author: "Cory DuBois"
+date: "Feb 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+##Load packages
+```{r}
+require(data.table)
+require(Biostrings)
+require(Peptides)
+require(ggplot2)
+require(ggfortify)
+require(stringi)
+require(matrixStats)
+```
+
+```{r}
+properties.func <- function(dt,punny){
+  dt[,"parameter":=punny]
+  #dt[,"pI":=as.numeric(unlist(kideraFactors(seq=(peptide)))[9])]
+  dt[,"hydrophobicity":=hydrophobicity((peptide),scale="KyteDoolittle")]
+  dt[,"aindex":=aindex((peptide))]
+  dt[,"boman":=boman((peptide))]
+  dt[,"charge":=charge((peptide))]
+  dt[,"instaindex":=instaindex((peptide))]
+  return(dt)
+}
+```
+
+```{r}
+CV.calc <- function(list1){
+  #list.cv <- abs(sd(list1)/mean(list1))
+  list.cv <- sd(list1)
+  return(list.cv)
+}
+```
+
+```{r}
+CV.dt <- function(dt){
+  
+  dt.out <- data.table(category = unique(dt[,aa_less]))
+  
+  dt.out[,pI.mean := mean(dt[,pI,by=aa_less])][,pI.CV := dt[,CV.calc(pI),by=aa_less]][,hydro.mean := dt[,mean(hydrophobicity),by=aa_less]][, hydro.CV:= dt[,CV.calc(hydrophobicity),by=aa_less]][,aindex.mean := dt[,mean(aindex),by=aa_less]][, aindex.CV := dt[,CV.calc(aindex),by=aa_less]][,boman.mean := dt[,mean(boman),by=aa_less]][, boman.CV := dt[,CV.calc(boman),by=aa_less]][,charge.mean := dt[,mean(charge),by=aa_less]][, charge := dt[,CV.calc(charge),by=aa_less]][,instaindex.mean := dt[,mean(instaindex),by=aa_less]][, instaindex.CV := dt[,CV.calc(instaindex),by=aa_less]]
+  
+  return(dt.out)
+}
+
+```
+
+```{r}
+#fread("~screening/R_Analyses")
+as.numeric(unlist(kideraFactors("AAAAAAAB"))[9])
+```
+
+#Generate Random Nucleotide Sequence and Translate
+```{r}
+#number of samples 
+n=1000
+good.aa <- c("C","R","I","L","V","A","M")
+#nucleotide list
+peptides <- c("A","D","E","F","G","H","I","K","L","M","N","P","Q","R","S","T","V","W","Y","C")
+temp.codons <-c("A","D","E","F","G","H","I","K","L","M","N","P","Q","R","S","T","V","W","Y","C")
+peptides <- peptides[!(peptides %in% good.aa)]
+
+no.aindex <- FALSE
+
+for(t in 1:length(peptides)){
+  
+  peptides <- peptides[!(peptides %in% good.aa)]
+  codon_list <- data.table(peptide=c(rep("A",(n*(length(peptides)+2)))))
+  
+  
+  x=n*3
+  s=2*n+1
+  
+  for(i in (1:n)){
+    #get 60mer random nucleotide as list using nuc and dinucs, compress lists, convert to proteins, append dt's
+      codon_list[i,peptide:=as.character(paste0(sample(temp.codons, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="None"][i,position:=i]
+  }
+  
+  for(i in (2*n):(3*n)){
+    codon_list[i,peptide:=as.character(paste0(sample(good.aa, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="current"][i,position:=i]
+  }
+  
+  for(aa in peptides){
+    for(i in (s:x)){
+    #get 60mer random nucleotide as list using nuc and dinucs, compress lists, convert to proteins, append dt's
+      temp.codons <- peptides[!(peptides %like% aa)]
+      codon_list[i,peptide:=as.character(paste0(sample(peptides, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:=aa][i,position:=i]
+    }
+    s = x+1
+    x = x + n
+  }
+  
+  setorder(codon_list,by="position")
+  
+  system.time({
+  codon_list<-properties.func(codon_list,"codon")
+  })
+  
+  if(mean(codon_list[,aindex]==0)){
+    codon_list = codon_list[,!c("aindex"),with=FALSE]
+    no.aindex <- TRUE
+  }
+  
+  codon_list[,aa_less:=as.factor(aa_less)]
+  
+  
+  codon_list_temp <- data.table(codon_list)
+  
+  codon_list_cleaned <- codon_list_temp[,!c("peptide","aa_less","parameter","position"),with=FALSE]
+  
+  x=n
+  s=1
+  for(j in 1:(length(peptides)+2)){
+      temp.mat <- as.matrix(codon_list_cleaned[s:x,])
+      mean.col <- t(colMeans(temp.mat))
+      variance.col <- t(colSds(temp.mat))
+      #variance.col <- variance.col/mean.col
+    if(j==1){
+      codon.var <- data.table(cbind(variance.col,mean.col))
+    } else {
+      codon.var <- data.table(rbind(codon.var,cbind(variance.col,mean.col)))
+    }
+    s=x+1
+    x=x+n
+  }
+
+  if(no.aindex==FALSE){
+    colnames(codon.var) <- (c("hydro.CV","aindex.CV","boman.CV","charge.CV","instaindex.CV","hydro.mean","aindex.mean","boman.mean","charge.mean","instaindex.mean"))
+    
+    codon.var[,aa_less:=unique(codon_list[,aa_less])]
+    only.CV <- scale(codon.var[,c("hydro.CV","aindex.CV","boman.CV","charge.CV","instaindex.CV"),with=FALSE])
+    
+  } else {
+    colnames(codon.var) <- (c("hydro.CV","boman.CV","charge.CV","instaindex.CV","hydro.mean","boman.mean","charge.mean","instaindex.mean"))
+  
+    codon.var[,aa_less:=unique(codon_list[,aa_less])]
+    only.CV <- scale(codon.var[,c("hydro.CV","boman.CV","charge.CV","instaindex.CV"),with=FALSE])
+  }
+  
+  codon.var[,avg_scaled_sd:=rowSums(only.CV)]
+  best.predictor <- as.character(codon.var[avg_scaled_sd==min(avg_scaled_sd)][,aa_less])
+  
+  if(best.predictor=="current" | best.predictor=="None"){
+    #stop looping, you done
+    break
+  } else {
+    good.aa <- c(good.aa,best.predictor)
+  }
+  print(good.aa)
+}
+
+```
+
+#output
+```{r}
+#fwrite(codon.var,"csvs/codon_vars.csv")
+#fwrite(codon_list,"csvs/one_less_peptides.csv")
+```
+
+
+

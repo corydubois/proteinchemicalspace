@@ -1,0 +1,133 @@
+---
+title: "5mil_topval"
+author: "Vivi"
+date: "April 25, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#this performs PCA on a 5 million peptide library, a 100K library selected from this library and a set of 100K random peptides from the original library
+
+setwd("/Users/Viviana/Documents/Bioinformatics")
+
+require(data.table)
+require(ggplot2)
+require(ggfortify)
+require(stats)
+require(lfda)
+require(cluster)
+require(cowplot)
+require(tidyr)
+require(dplyr)
+#set color palettepro
+cbbPalette <- c("#000000","#E69F00", "#0072B2", "#009E73", "#F0E442", "#56B4E9", "#D55E00", "#CC79A7")
+
+#load in original 5 mil peptide library
+protprop2<-fread("5mil_properties.tsv")
+#load in 100K peptide library selected from 5mil library
+select_peptides<-fread("select100K_5mil_morevar.tsv")
+#load in 100000 random peptides (selected from original 5 mil) and their properties
+random<-fread("random_100K_5mil.tsv")
+#Cleaning up the data (removing extraneous columns, replacing NA with 0)
+random<-data.table(random[,0:1, with=FALSE],random[,3:27, with=FALSE])
+random[is.na(random)]<-0
+select_peptides<-data.table(select_peptides[,0:1, with=FALSE],select_peptides[,3:27, with=FALSE])
+select_peptides[is.na(select_peptides)]<-0
+protprop2<-data.table(protprop2[,0:1, with=FALSE],protprop2[,3:27, with=FALSE])
+protprop2[is.na(protprop2)]<-0
+
+#PCA for analysis
+#getting only rows with numbers
+select_peptides%>% select(aromatic:flexibility) -> chosen_peptide.pca.cols
+
+protprop2 %>% select(aromatic:flexibility) -> full.pca.cols
+
+random %>% select(aromatic:flexibility) -> rando.pca.cols
+
+#Do the PCA on the full library
+full.pca <- prcomp (full.pca.cols, center = TRUE, scale. = TRUE)
+
+#Remove to free up memory
+remove(full.pca.cols)
+
+#print summary to get PC1 and PC2 percent variance explained
+summary(full.pca)
+
+#apply PCA rotation from full library to this library
+chosen_peptide.pca <- predict(full.pca,chosen_peptide.pca.cols)
+remove(chosen_peptide.pca.cols)
+rando.pca <- predict(full.pca,rando.pca.cols)
+remove(rando.pca.cols)
+#add pc1 and pc2 values to each libary. Assign group name as factor_var
+select_peptides[,pcomp1:=chosen_peptide.pca[,1]][,pcomp2:=chosen_peptide.pca[,2]][,factor_var:="Select_100K"]
+#add pc1 and pc2 values to full library
+protprop2[,pcomp1:= full.pca$x[,1]][,pcomp2:= full.pca$x[,2]]
+random[,pcomp1:=rando.pca[,1]][,pcomp2:=rando.pca[,2]][,factor_var:="Random_100K"]
+
+#set factor names
+protprop2[,factor_var:="5M "]
+
+#put all of the data into one data table
+protprop2 <- rbind(protprop2,select_peptides,random)
+#make factor_var a factor variable
+protprop2[,factor_var:=as.factor(factor_var)]
+#remove full data from library for histogram visualization
+protprop2.histo <- protprop2[factor_var!="5M "]
+
+#this randomizes the points in the library so the PCA looks a little better
+randos <- sample(nrow(protprop2))
+protprop2<- protprop2[randos,]
+
+#code for scatter plot of PC1 v PC2 (this takes forever to run)
+outplot <- ggplot(data=protprop2,aes(x=pcomp1 ,y=pcomp2 ,colour=factor_var))+geom_jitter(alpha=0.3,shape = 20, size = 0.2)+
+  scale_colour_manual(values=cbbPalette)+
+  theme(legend.position = c(0.15,0.9),
+        legend.title=element_blank())+
+  ylab("PC2 (20.7%)")+xlab("PC1 (37.8%)")+
+  stat_ellipse(size=0.5,alpha=1,aes( colour=factor_var),type="t")
+
+save_plot(filename="PCA_top_5mil.png",outplot)
+
+#code for violin plot of PC1
+outplot <- ggplot(data=protprop2,aes(x=factor_var,y=pcomp1 ,fill=factor_var))+
+  geom_violin(bw=1.5)+
+  scale_colour_manual(values=cbbPalette)+
+  theme(axis.ticks.x=element_blank(),
+      axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      legend.position="bottom",
+      legend.title=element_blank(),
+      panel.background=element_blank(),
+      panel.border=element_blank(),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      plot.background=element_blank())+
+  ylab("PC1 (37.8%)")
+save_plot(filename="vio_1_top_5mil.png",outplot)
+
+#code for violin plot of PC2
+outplot <- ggplot(data=protprop2,aes(x=factor_var,y=pcomp2 ,fill=factor_var))+
+  geom_violin(bw=0.5)+scale_colour_manual(values=cbbPalette)+
+   theme(axis.ticks.x=element_blank(),
+      axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      legend.position="bottom",
+      legend.title=element_blank(),
+      panel.background=element_blank(),
+      panel.border=element_blank(),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      plot.background=element_blank())+
+  ylab("PC2 (20.7%)")
+
+save_plot(filename="vio_2_top_5mil.png",outplot)
+
+#code for histogram of PC1
+outplot <- ggplot(data=protprop2.histo,aes(x=pcomp1, fill=factor_var))+
+  geom_histogram(alpha = 0.5,position="dodge",bins=25)
+save_plot(filename="Histo_1_top_5mil.png",outplot)
+
+#code for histogram of PC2
+outplot <- ggplot(data=protprop2.histo,aes(x=pcomp2, fill=factor_var))+
+  geom_histogram(alpha = 0.5,position="dodge",bins=20)
+save_plot(filename="Histo_2_top_5mil.png",outplot)

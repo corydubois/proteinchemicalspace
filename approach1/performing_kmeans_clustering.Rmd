@@ -1,0 +1,59 @@
+```{r setup, include=FALSE}
+#This code is used to perform PCA on a 5-million peptide library, and then performing k-means clustering on the library (where PCA1 and PCA2 will be used for k-means clustering). This will also generate a PCA plot where points are colored by the k-means cluster the point is in.
+
+#set working directory
+setwd("/Users/Viviana/Documents/Bioinformatics")
+#load required packages
+require(data.table)
+require(ggplot2)
+require(ggfortify)
+require(stats)
+require(lfda)
+require(cluster)
+require(cowplot)
+require(tidyr)
+require(dplyr)
+
+#load in original 5 mil peptide library
+protprop2<-fread("5mil_properties.tsv")
+#cleaning up the library - remove unnecessary columns and replace NA with zero
+protprop2<-data.table(protprop2[,0:1, with=FALSE],protprop2[,3:27, with=FALSE])
+protprop2[is.na(protprop2)]<-0
+
+#PCA for analysis
+#getting only rows with numbers
+protprop2 %>% select(aromatic:Y) -> full.pca.cols
+
+
+#Do the PCA on the full library
+full.pca <- prcomp (full.pca.cols, center = TRUE, scale. = TRUE)
+
+#Remove to free up memory
+remove(full.pca.cols)
+
+#print summary to get PC1 and PC2 percent variance explained
+summary(full.pca)
+
+
+#add pc1 and pc2 values to full library
+protprop2[,pcomp1:= full.pca$x[,1]][,pcomp2:= full.pca$x[,2]]
+
+#prepare the data table for k-means (all columns except for the PCA1 and PCA2 columns)
+protprop3<-data.table(protprop2[,27:28, with=FALSE])
+
+#perform k-means clustering used the Lloyd algorithm, and using k=10. Maximum iterations used is 1000
+fit <- kmeans(protprop3, algorithm="Lloyd", 10, iter.max=1000) 
+aggregate(protprop3,by=list(fit$cluster),FUN=mean)
+
+# append cluster assignment to the original data table with the 5 million peptide library
+protprop2 <- data.table(protprop2[,1:28,with=FALSE] [,cluster:=fit$cluster])
+
+#code for scatter plot of PC1 v PC2 (this takes forever to run). Points are coloured by cluster assignment
+outplot <- ggplot(data=protprop2,aes(x=pcomp1 ,y=pcomp2 ,colour=cluster))+geom_point(alpha=0.3,shape = 20, size = 0.2)+
+  ylab("PC2 (8.4%)")+xlab("PC1 (12.4%)")
+save_plot(filename="clusters3.png",outplot)
+
+#export the 5 million peptide library (with cluster assignments) to a csv file.
+write.csv(protprop2, "proteins_with_clusters.csv")
+
+```

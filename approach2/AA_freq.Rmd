@@ -1,0 +1,133 @@
+---
+title: "AA_freq.rmd"
+author: "Cory DuBois"
+date: "April 24 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+##Load packages
+```{r}
+require(data.table)
+require(ggplot2)
+require(ggfortify)
+require(stats)
+require(lfda)
+require(cluster)
+require(cowplot)
+require(tidyr)
+require(dplyr)
+require(ggsignif)
+#set color palette
+cbbPalette <- c("#000000", "#E69F00", "#0072B2", "#009E73", "#F0E442", "#56B4E9", "#D55E00", "#CC79A7")
+```
+
+#Load data file
+```{r}
+#Note: you may have to edit filepaths or move files to run this
+
+#load in full random peptides and properties
+liberry<-fread("combined_pca_data.csv")
+#liberry<-liberry[factor_var!="10M"]
+
+```
+
+#convert to full AA names
+```{r}
+aa.list <- c("A","C","D","E","F","G","H","I","K","L","M","N","P","Q","R","S","T","V","W","Y")
+three.list <- c("Alanine","Cysteine","Aspartic Acid","Glutamic Acid","Phenylalanine","Glycine","Histidine","Isoleucine","Lysine","Leucine","Methionine","Asparagine","Proline","Glutamine","Arginine","Serine","Threonine","Valine","Tryptophan","Tyrosine")
+
+for(aa in 1:length(aa.list)){
+  setnames(liberry,eval(aa.list[aa]),eval(three.list[aa]))
+  #peptides.in[,eval(aa):=100*stri_count(peptide,regex=aa)/nchar(peptide),by=1:nrow(peptides.in)]
+}
+
+```
+
+```{r}
+liberry[,factor_var:=droplevels(as.factor(factor_var))]
+
+data.table(liberry %>% select(factor_var, Alanine:Tyrosine) %>%
+  gather(AA, frequency, Alanine:Tyrosine) )-> aa_table
+
+data.table(aa_table %>% group_by(factor_var, AA) %>%
+  summarize(mean_freq = mean(frequency), sdev = (2*sd(frequency)/sqrt(length(frequency))))) -> outtie
+
+```
+
+#do ANOVA
+```{r}
+#ANOVA
+aa_table[,Active_Screened:=unlist(TukeyHSD(aov(frequency~factor_var)))[10],by="AA"]
+
+temp.whatev <- unique(aa_table[,L100K:=unlist(TukeyHSD(aov(frequency~factor_var)))[10],by="AA"
+                               ][,Pruned_10M:=unlist(TukeyHSD(aov(frequency~factor_var)))[11],by="AA"
+                          ][,Top15_100K:=unlist(TukeyHSD(aov(frequency~factor_var)))[12],by="AA"
+                            ][,c("AA","L100K", "Pruned_10M","Top15_100K")])
+
+
+
+data.table(temp.whatev %>%
+             gather(factor_var, pvals, L100K:Top15_100K) )-> temp.whatev
+
+temp.whatev[factor_var=="L100K",factor_var:="100K"
+            ][factor_var=="Pruned_10M",factor_var:="Pruned 10M"
+              ][factor_var=="Top15_100K",factor_var:="Top15 100K"]
+
+temp.whatev[,factor_var:=as.factor(factor_var)]
+
+temp.whatev[,pvals:=p.adjust(pvals,"bonferroni")]
+
+data.table(aa_table %>% group_by(factor_var, AA) %>%
+  summarize(mean_freq = mean(frequency), sdev = (2*sd(frequency)/sqrt(length(frequency))))) -> outtie
+
+#print stuff
+print.guy <- data.table(merge(temp.whatev,outtie,on="factor_var",all=TRUE))
+#print.guy <- outtie
+print.guy[pvals<0.001,sig:="***"
+          ][pvals>=0.01,sig:="*"
+          ][pvals>=0.001,sig:="**"
+          ][pvals>=0.05 | is.na(pvals),sig:=""]
+
+print.guy[factor_var=="100K",xb:=1
+          ][factor_var=="100K",xe:=2
+          ][factor_var=="100K",ya:=1.3
+          ][factor_var=="Pruned 10M",xb:=1
+          ][factor_var=="Pruned 10M",xe:=3
+          ][factor_var=="Pruned 10M",ya:=1.6
+          ][factor_var=="Top15 100K",xb:=2
+          ][factor_var=="Top15 100K",xe:=3
+          ][factor_var=="Top15 100K",ya:=1.9]
+print.guy[pvals>=0.05 | is.na(pvals),ya:=-1]
+```
+
+
+```{r}
+plot <- ggplot(data=print.guy,aes(x=factor_var, y=mean_freq, fill=factor_var)) + 
+  geom_bar(position="dodge", stat="identity")+
+  facet_wrap(~AA) + 
+  geom_signif(stat="identity",aes(x=xb,xend=xe, y=ya, yend=ya, annotation=sig),vjust=0.6)+ 
+  geom_errorbar(aes(ymin=mean_freq-sdev,ymax=mean_freq+sdev),width=0.2,size=0.3) +
+  scale_fill_manual(values=cbbPalette) +
+  ylab("Average Counts")+
+  ylim(0,2)+
+  theme(legend.position = "bottom",
+        legend.title=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+pdf(file="Anova.pdf")
+print(plot)
+dev.off()
+
+```

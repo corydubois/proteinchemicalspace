@@ -1,0 +1,181 @@
+---
+title: "calc_properties.Rmd"
+author: "Cory DuBois"
+date: "Feb 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+##Load packages
+```{r}
+require(data.table)
+require(Biostrings)
+require(Peptides)
+require(ggplot2)
+require(ggfortify)
+require(stringi)
+require(matrixStats)
+require(cowplot)
+cbbPalette <- c("#000000", "#E69F00", "#0072B2", "#009E73", "#F0E442", "#56B4E9", "#D55E00", "#CC79A7")
+```
+
+```{r}
+properties.func <- function(dt,punny){
+  dt[,"parameter":=punny]
+  #dt[,"pI":=as.numeric(unlist(kideraFactors(seq=(peptide)))[9])]
+  dt[,"hydrophobicity":=hydrophobicity((peptide),scale="KyteDoolittle")]
+  dt[,"aindex":=aindex((peptide))]
+  dt[,"boman":=boman((peptide))]
+  dt[,"charge":=charge((peptide))]
+  dt[,"instaindex":=instaindex((peptide))]
+  return(dt)
+}
+```
+
+```{r}
+CV.calc <- function(list1){
+  #list.cv <- abs(sd(list1)/mean(list1))
+  list.cv <- sd(list1)
+  return(list.cv)
+}
+```
+
+```{r}
+CV.dt <- function(dt){
+  
+  dt.out <- data.table(category = unique(dt[,aa_less]))
+  
+  dt.out[,pI.mean := mean(dt[,pI,by=aa_less])][,pI.CV := dt[,CV.calc(pI),by=aa_less]][,hydro.mean := dt[,mean(hydrophobicity),by=aa_less]][, hydro.CV:= dt[,CV.calc(hydrophobicity),by=aa_less]][,aindex.mean := dt[,mean(aindex),by=aa_less]][, aindex.CV := dt[,CV.calc(aindex),by=aa_less]][,boman.mean := dt[,mean(boman),by=aa_less]][, boman.CV := dt[,CV.calc(boman),by=aa_less]][,charge.mean := dt[,mean(charge),by=aa_less]][, charge := dt[,CV.calc(charge),by=aa_less]][,instaindex.mean := dt[,mean(instaindex),by=aa_less]][, instaindex.CV := dt[,CV.calc(instaindex),by=aa_less]]
+  
+  return(dt.out)
+}
+
+```
+
+#Generate Random Nucleotide Sequence and Translate
+```{r}
+#number of samples 
+n=100000
+#number of groups
+nl=5
+
+full_peptides <- c("A","C","D","E","F","G","H","I","K","L","M","N","P","Q","R","S","T","V","W","Y")
+peptides_5 <- c("C","R","I","L","V")
+peptides_10 <- c("C","R","I","L","V","A","M","F","S","E")
+peptides_15 <- c("C","R","I","L","V","A","M","F","S","E","D","K","H","Q","N")
+peptides_ordered <- c("C","R","I","L","V","A","M","F","S","E","D","K","H","Q","N","T","Y")
+
+codon_list <- data.table(peptide=c(rep("A",n*nl)))
+
+x=n*2
+s=n+1
+
+for(i in (1:(nl*n))){
+  #get 60mer random nucleotide as list using nuc and dinucs, compress lists, convert to proteins, append dt's
+    if (i<=n){
+      codon_list[i,peptide:=as.character(paste0(sample(full_peptides, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="All"][i,position:=i]
+    } else if(i>4*n) {
+      codon_list[i,peptide:=as.character(paste0(sample(peptides_ordered, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="Top 17"][i,position:=i]
+    } else if(i>3*n) {
+      codon_list[i,peptide:=as.character(paste0(sample(peptides_15, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="Top 15"][i,position:=i]
+    } else if(i>2*n) {
+      codon_list[i,peptide:=as.character(paste0(sample(peptides_10, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="Top 10"][i,position:=i]
+    } else {
+      codon_list[i,peptide:=as.character(paste0(sample(peptides_5, 20, replace = TRUE, prob = NULL),collapse=""))][i,aa_less:="Top 5"][i,position:=i]
+    }
+  }
+
+setorder(codon_list,by="position")
+
+system.time({
+codon_list<-properties.func(codon_list,"codon")
+})
+
+codon_list[,aa_less:=as.factor(aa_less)]
+
+codon_fun<- codon_list[,!c("peptide","aa_less","parameter","position"),with=FALSE]
+codon_list_cleaned<- codon_list[aa_less=="All"][,!c("peptide","aa_less","parameter","position"),with=FALSE]
+
+combo_pca<-prcomp(codon_list_cleaned, center = TRUE, scale. = TRUE)
+pred.comp <- predict(combo_pca,codon_fun)
+summary(combo_pca)
+codon_list[,pcomp1:=pred.comp[,1]][,pcomp2:=pred.comp[,2]][,pcomp3:=pred.comp[,3]]
+  
+
+codon_list_cleaned <- codon_list[aa_less!="Top 5"]
+randos <- sample(nrow(codon_list_cleaned))
+codon_list_cleaned <- codon_list_cleaned[randos,]
+
+#autoplot(combo_pca,data=codon_list_temp[,c("aa_less","charge"),with=FALSE],colour="aa_less", main="PCA",alpha=0,shape=1)+scale_colour_hue(h=c(0,320))+stat_ellipse(aes(PC1,PC2, color=aa_less),type="norm")
+```
+
+#print stuff
+```{r}
+pca <- ggplot(data=codon_list_cleaned,aes(y=pcomp1,x=pcomp2,colour=aa_less))+geom_point(alpha=0.3,shape = 20, size = 0.2)+
+  scale_colour_manual(values=cbbPalette)+
+  theme(legend.position = c(0.15,0.9),
+        legend.title=element_blank())+
+  ylab("PC2 (20.1%)")+xlab("PC1 (49.1%)")+ 
+  ggtitle("PCA for Subsets of Amino Acids")+
+  stat_ellipse(size=0.5,alpha=1,aes( colour=aa_less),type="t")
+
+save_plot(file="pngs/PCA.png",pca)
+
+vio1 <- ggplot(data=codon_list_cleaned,aes(y=pcomp1,x=aa_less,fill=aa_less))+geom_violin(bw=2)+
+  scale_fill_manual(values=cbbPalette)+
+  theme(legend.position = "right",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.title=element_blank())+
+  ylab("PC1 (49.1%)")+
+  ggtitle("Variability in PC1")
+
+save_plot(file="pngs/Violin1.png",print_dis_shizz)
+pca <- plot_grid(pca,labels=c("A"),ncol=1)
+save_plot(filename="PCA.png",pca)
+
+vio2 <- ggplot(data=codon_list_cleaned,aes(y=pcomp2,x=aa_less,fill=aa_less))+geom_violin(bw=1.5)+
+  scale_fill_manual(values=cbbPalette)+
+  theme(legend.position = "right",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.title=element_blank())+
+  ylab("PC2 (20.1%)")+
+  ggtitle("Variability in PC2")
+
+save_plot(file="pngs/Violin2.png",print_dis_shizz)
+
+vio3 <- ggplot(data=codon_list_cleaned,aes(y=pcomp3,x=aa_less,fill=aa_less))+geom_violin(bw=1)+
+  scale_fill_manual(values=cbbPalette)+
+  theme(legend.position = "bottom",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.title=element_blank())+
+  ylab("Principal Comp 3")
+save_plot(file="pngs/Violin3.png",print_dis_shizz)
+
+plot_out <- plot_grid(vio1,vio2,labels=c("B","C"),ncol=1)
+save_plot(filename="figure_1.png",plot_out,base_aspect_ratio = 1.2)
+
+
+print_dis_shizz <- ggplot(data=codon_list_cleaned,aes(x=pcomp1,fill=aa_less))+geom_density(position="dodge",alpha = 0.2)
+
+save_plot(file="pngs/Dens1.png",print_dis_shizz)
+
+print_dis_shizz <- ggplot(data=codon_list_cleaned,aes(x=pcomp2,fill=aa_less))+geom_density(position="dodge", alpha = 0.2,bw=0.75)
+
+save_plot(file="pngs/Dens2.png",print_dis_shizz)
+
+```
